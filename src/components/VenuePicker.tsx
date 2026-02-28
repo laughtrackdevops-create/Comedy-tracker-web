@@ -49,7 +49,7 @@ export default function VenuePicker({ value, onChange }: VenuePickerProps) {
       <option value="">Select a venue...</option>
       {venues.map((venue) => (
         <option key={venue.id} value={venue.id}>
-          {venue.name} — {venue.city}, {venue.state}
+          {venue.name}{venue.city ? ` — ${venue.city}` : ""}
         </option>
       ))}
     </select>

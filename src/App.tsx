@@ -1,54 +1,41 @@
-import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { Session } from '@supabase/supabase-js'
-import { supabase } from './lib/supabaseClient'
-import AuthPage from './pages/AuthPage'
-import ShowsPage from './pages/ShowsPage'
-import Navbar from './components/Navbar'
+import React, { useEffect, useState } from "react";
+import { supabase } from "./lib/supabaseClient";
+import { Session } from "@supabase/supabase-js";
+import Navbar from "./components/Navbar";
+import AuthPage from "./pages/AuthPage";
+import ShowsPage from "./pages/ShowsPage";
 
-function App() {
-  const [session, setSession] = useState<Session | null>(null)
-  const [loading, setLoading] = useState(true)
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setLoading(false)
-    })
+    let isMounted = true;
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-    })
+    supabase.auth.getSession().then(({ data }) => {
+      if (!isMounted) return;
+      setSession(data.session);
+      setLoading(false);
+    });
 
-    return () => subscription.unsubscribe()
-  }, [])
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
 
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <p>Loading...</p>
-      </div>
-    )
-  }
+    return () => {
+      isMounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
 
   return (
-    <BrowserRouter>
-      {session && <Navbar session={session} />}
-      <Routes>
-        <Route
-          path="/auth"
-          element={session ? <Navigate to="/shows" replace /> : <AuthPage />}
-        />
-        <Route
-          path="/shows"
-          element={session ? <ShowsPage session={session} /> : <Navigate to="/auth" replace />}
-        />
-        <Route path="*" element={<Navigate to={session ? '/shows' : '/auth'} replace />} />
-      </Routes>
-    </BrowserRouter>
-  )
+    <div style={{ fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
+      <Navbar session={session} />
+      <div style={{ maxWidth: 980, margin: "0 auto", padding: 16 }}>
+        {session ? <ShowsPage session={session} /> : <AuthPage />}
+      </div>
+    </div>
+  );
 }
-
-export default App
