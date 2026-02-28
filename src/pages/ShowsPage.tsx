@@ -1,309 +1,239 @@
-import { useEffect, useState } from "react";
-import { Session } from "@supabase/supabase-js";
+import React, { useEffect, useMemo, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
-import { Show } from "../lib/types";
+import type { Show, Venue } from "../lib/types";
 import VenuePicker from "../components/VenuePicker";
 
-interface ShowsPageProps {
-  session: Session;
-}
+const PAGE_SIZE = 25;
 
-interface NewShow {
-  title: string;
-  venue_id: string;
-  show_date: string;
-}
+export default function ShowsPage({ session }: { session: Session }) {
+  const userId = session.user.id;
 
-const emptyForm: NewShow = {
-  title: "",
-  venue_id: "",
-  show_date: "",
-};
-
-export default function ShowsPage({ session }: ShowsPageProps) {
   const [shows, setShows] = useState<Show[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<NewShow>(emptyForm);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadShows(); }, []);
+  // Add Show form
+  const [title, setTitle] = useState("");
+  const [showDate, setShowDate] = useState("");
+  const [venue, setVenue] = useState<Venue | null>(null);
 
-  async function loadShows() {
-    const { data, error } = await supabase
-      .from("shows")
-      .select("*, venues(*)")
-      .eq("user_id", session.user.id)
-      .order("show_date", { ascending: false });
+  const canAdd = useMemo(() => !!showDate && !!venue, [showDate, venue]);
 
-    if (error) {
-      setError("Failed to load shows");
-    } else {
-      setShows(data ?? []);
+  async function loadShows(reset = false) {
+    setErr(null);
+    setBusy(true);
+    try {
+      const currentPage = reset ? 0 : page;
+      const from = currentPage * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      const { data, error } = await supabase
+        .from("shows")
+        .select("id,title,show_date,venue_id,venues(id,name,city)")
+        .eq("user_id", userId)
+        .order("show_date", { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      setShows((data as unknown as Show[]) ?? []);
+      if (reset) setPage(0);
+    } catch (e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      setErr(e?.message ?? "Failed to load shows.");
+    } finally {
+      setBusy(false);
     }
-    setLoading(false);
   }
 
-  async function handleAddShow(e: React.FormEvent) {
+  useEffect(() => {
+    void loadShows(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function addShow(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setError(null);
+    if (!canAdd || !venue) return;
 
-    const { error } = await supabase.from("shows").insert({
-      ...form,
-      user_id: session.user.id,
-    });
+    setErr(null);
+    setBusy(true);
+    try {
+      const payload = {
+        user_id: userId,
+        title: title.trim() || null,
+        show_date: new Date(showDate).toISOString(),
+        venue_id: venue.id
+      };
 
-    if (error) {
-      setError("Failed to save show: " + error.message);
-    } else {
-      setForm(emptyForm);
-      setShowForm(false);
-      await loadShows();
+      const { error } = await supabase.from("shows").insert(payload);
+      if (error) throw error;
+
+      setTitle("");
+      setShowDate("");
+      setVenue(null);
+
+      await loadShows(true);
+    } catch (e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      setErr(e?.message ?? "Failed to add show.");
+    } finally {
+      setBusy(false);
     }
-    setSaving(false);
   }
 
-  async function handleDelete(showId: string) {
-    if (!confirm("Delete this show?")) return;
-    const { error } = await supabase.from("shows").delete().eq("id", showId);
-    if (!error) {
-      setShows((prev) => prev.filter((s) => s.id !== showId));
+  async function nextPage() {
+    const newPage = page + 1;
+    setPage(newPage);
+    setErr(null);
+    setBusy(true);
+    try {
+      const from = newPage * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      const { data, error } = await supabase
+        .from("shows")
+        .select("id,title,show_date,venue_id,venues(id,name,city)")
+        .eq("user_id", userId)
+        .order("show_date", { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      const rows = (data as unknown as Show[]) ?? [];
+      if (rows.length === 0) {
+        // no more data; revert page
+        setPage((p) => Math.max(0, p - 1));
+      } else {
+        setShows(rows);
+      }
+    } catch (e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      setErr(e?.message ?? "Failed to page.");
+      setPage((p) => Math.max(0, p - 1));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function prevPage() {
+    const newPage = Math.max(0, page - 1);
+    setPage(newPage);
+    setErr(null);
+    setBusy(true);
+    try {
+      const from = newPage * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      const { data, error } = await supabase
+        .from("shows")
+        .select("id,title,show_date,venue_id,venues(id,name,city)")
+        .eq("user_id", userId)
+        .order("show_date", { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      setShows((data as unknown as Show[]) ?? []);
+    } catch (e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      setErr(e?.message ?? "Failed to page.");
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <h1 style={{ margin: 0, color: "#1a1a2e" }}>My Shows</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          style={{
-            padding: "0.5rem 1rem",
-            backgroundColor: "#1a1a2e",
-            color: "#fff",
-            border: "none",
-            borderRadius: "4px",
-            cursor: "pointer",
-          }}
-        >
-          {showForm ? "Cancel" : "+ Add Show"}
+    <div style={{ display: "grid", gap: 18 }}>
+      <h2 style={{ margin: 0 }}>My Shows</h2>
+
+      <form onSubmit={addShow} style={{ display: "grid", gap: 12 }}>
+        <h3 style={{ margin: 0 }}>Add show</h3>
+
+        <label>
+          Title (optional)
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g., Open mic / Feature / Headline"
+            style={{ width: "100%", padding: 10, marginTop: 4 }}
+          />
+        </label>
+
+        <label>
+          Date & time
+          <input
+            value={showDate}
+            onChange={(e) => setShowDate(e.target.value)}
+            type="datetime-local"
+            required
+            style={{ width: "100%", padding: 10, marginTop: 4 }}
+          />
+        </label>
+
+        <div>
+          <div style={{ marginBottom: 6, fontWeight: 600 }}>Venue</div>
+          <VenuePicker value={venue} onChange={setVenue} />
+        </div>
+
+        <button disabled={!canAdd || busy} style={{ padding: 12, cursor: "pointer" }}>
+          {busy ? "Saving…" : "Add show"}
         </button>
+
+        {err && <div style={{ color: "crimson" }}>{err}</div>}
+      </form>
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <button onClick={() => loadShows(true)} disabled={busy} style={{ padding: 10 }}>
+          Refresh
+        </button>
+        <span style={{ fontSize: 13, color: "#666" }}>
+          Page {page + 1} (max {PAGE_SIZE} rows)
+        </span>
       </div>
 
-      {showForm && (
-        <form
-          onSubmit={handleAddShow}
-          style={{
-            backgroundColor: "#fff",
-            padding: "1.5rem",
-            borderRadius: "8px",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-            marginBottom: "1.5rem",
-          }}
-        >
-          <h2 style={{ margin: "0 0 1rem", fontSize: "1.1rem" }}>
-            Add New Show
-          </h2>
+      <div style={{ border: "1px solid #ddd", borderRadius: 10, overflow: "hidden" }}>
+        {shows.length === 0 ? (
+          <div style={{ padding: 16 }}>No shows yet.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#fafafa" }}>
+                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid #eee" }}>
+                  Date
+                </th>
+                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid #eee" }}>
+                  Title
+                </th>
+                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid #eee" }}>
+                  Venue
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {shows.map((s) => (
+                <tr key={s.id}>
+                  <td style={{ padding: 12, borderBottom: "1px solid #f1f1f1", width: 210 }}>
+                    {new Date(s.show_date).toLocaleString()}
+                  </td>
+                  <td style={{ padding: 12, borderBottom: "1px solid #f1f1f1" }}>
+                    {s.title ?? "—"}
+                  </td>
+                  <td style={{ padding: 12, borderBottom: "1px solid #f1f1f1" }}>
+                    {s.venues?.name ?? "—"}{" "}
+                    <span style={{ color: "#666", fontSize: 13 }}>
+                      {s.venues?.city ? `(${s.venues.city})` : ""}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
-          {error && (
-            <div
-              style={{
-                color: "#c0392b",
-                backgroundColor: "#fde8e8",
-                padding: "0.75rem",
-                borderRadius: "4px",
-                marginBottom: "1rem",
-                fontSize: "0.875rem",
-              }}
-            >
-              {error}
-            </div>
-          )}
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "1rem",
-              marginBottom: "1rem",
-            }}
-          >
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  marginBottom: "0.25rem",
-                  fontSize: "0.875rem",
-                  fontWeight: 500,
-                }}
-              >
-                Show Title
-              </label>
-              <input
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                required
-                placeholder="e.g. Special Comedy Night"
-                style={{
-                  width: "100%",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.95rem",
-                  boxSizing: "border-box",
-                }}
-              />
-            </div>
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  marginBottom: "0.25rem",
-                  fontSize: "0.875rem",
-                  fontWeight: 500,
-                }}
-              >
-                Show Date
-              </label>
-              <input
-                type="date"
-                value={form.show_date}
-                onChange={(e) =>
-                  setForm({ ...form, show_date: e.target.value })
-                }
-                required
-                style={{
-                  width: "100%",
-                  padding: "0.5rem",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.95rem",
-                  boxSizing: "border-box",
-                }}
-              />
-            </div>
-          </div>
-
-          <div style={{ marginBottom: "1rem" }}>
-            <label
-              style={{
-                display: "block",
-                marginBottom: "0.25rem",
-                fontSize: "0.875rem",
-                fontWeight: 500,
-              }}
-            >
-              Venue
-            </label>
-            <VenuePicker
-              value={form.venue_id}
-              onChange={(id) => setForm({ ...form, venue_id: id })}
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={saving}
-            style={{
-              padding: "0.6rem 1.25rem",
-              backgroundColor: "#27ae60",
-              color: "#fff",
-              border: "none",
-              borderRadius: "4px",
-              cursor: saving ? "not-allowed" : "pointer",
-              opacity: saving ? 0.7 : 1,
-            }}
-          >
-            {saving ? "Saving..." : "Save Show"}
-          </button>
-        </form>
-      )}
-
-      {loading ? (
-        <p>Loading shows...</p>
-      ) : shows.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "3rem", color: "#999" }}>
-          <p style={{ fontSize: "1.1rem" }}>No shows yet.</p>
-          <p style={{ fontSize: "0.9rem" }}>
-            Click "+ Add Show" to track a comedy show!
-          </p>
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          {shows.map((show) => (
-            <div
-              key={show.id}
-              style={{
-                backgroundColor: "#fff",
-                padding: "1rem 1.25rem",
-                borderRadius: "8px",
-                boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-              }}
-            >
-              <div>
-                <h3
-                  style={{
-                    margin: "0 0 0.25rem",
-                    fontSize: "1rem",
-                    color: "#1a1a2e",
-                  }}
-                >
-                  {show.title ?? "(Untitled)"}
-                </h3>
-                {show.venues && (
-                  <p
-                    style={{
-                      margin: "0 0 0.25rem",
-                      fontSize: "0.9rem",
-                      color: "#555",
-                    }}
-                  >
-                    {show.venues.name}
-                    {show.venues.city ? `, ${show.venues.city}` : ""}
-                  </p>
-                )}
-                <p style={{ margin: 0, fontSize: "0.8rem", color: "#999" }}>
-                  {new Date(show.show_date).toLocaleDateString("en-US", {
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                  })}
-                </p>
-              </div>
-
-              <button
-                onClick={() => handleDelete(show.id)}
-                style={{
-                  padding: "0.25rem 0.5rem",
-                  backgroundColor: "#e74c3c",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                  flexShrink: 0,
-                  marginLeft: "1rem",
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <div style={{ display: "flex", gap: 10 }}>
+        <button onClick={prevPage} disabled={busy || page === 0} style={{ padding: 10 }}>
+          Prev
+        </button>
+        <button onClick={nextPage} disabled={busy} style={{ padding: 10 }}>
+          Next
+        </button>
+      </div>
     </div>
   );
 }
